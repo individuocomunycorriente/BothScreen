@@ -1,0 +1,41 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'cl.danko.bothscreen'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'cl.danko.bothscreen'
+        minSdk 21
+        targetSdk 35
+        versionCode 3
+        versionName '1.1.0'
+    }
+
+    sourceSets {
+        main {
+            // El manifiesto de Gradle es una copia sin el atributo `package`,
+            // que AGP 8 ya no acepta. El otro (app/src/main/AndroidManifest.xml)
+            // es el que usa build-apk.sh, que sí lo necesita.
+            manifest.srcFile 'src/gradle/AndroidManifest.xml'
+            java.srcDirs = ['src/main/java']
+            res.srcDirs = ['src/main/res']
+        }
+    }
+
+    buildTypes {
+        release {
+            // Sin ofuscación: el APK son cuatro clases y conviene poder leer
+            // los stack traces de logcat tal cual.
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+}

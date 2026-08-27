@@ -1,0 +1,21 @@
+# Artefactos de compilación
+build/
+*.deb
+*.apk
+*.idsig
+__pycache__/
+*.pyc
+
+# Clave de firma del APK. NO subir nunca a un repositorio público: quien la
+# tenga puede compilar un APK que Android acepte como actualización de esta
+# app. Guárdala aparte y a buen recaudo; si se pierde, las versiones nuevas ya
+# no se instalarán encima de la que tengas puesta y habrá que desinstalar
+# primero. build-apk.sh genera una nueva si no la encuentra.
+*.keystore
+*.jks
+
+# Salidas de las pruebas
+/linux/tests/*.class
+
+# Paquetes de código fuente
+*.tar.gz
