@@ -1,3 +1,7 @@
+## Disclaimer
+Este proyecto está hecho completamente con Claude. Tuve una necesidad y la cubrí lo más rápido posible. 
+Hasta ahora funciona bien, pero cualquier error que noten, por favor háganlo saber por medio de las issues.
+
 # BothScreen
 
 Convierte una **Samsung Galaxy Tab S7** en un monitor externo de tu **Ubuntu
