@@ -137,6 +137,16 @@ class Window(Adw.ApplicationWindow):
         self.fps_row.set_selected(_indice(FPS_OPCIONES, self.cfg.fps, 1))
         grupo.add(self.fps_row)
 
+        self.min_fps_row = Adw.SpinRow.new_with_range(0, 60, 1)
+        self.min_fps_row.set_title("FPS mínimos garantizados")
+        self.min_fps_row.set_subtitle(
+            "Refresca la tablet a este ritmo aunque en la pantalla no cambie "
+            "nada. Es lo que hace que el puntero se vea moverse sobre un "
+            "escritorio quieto. Repetir una imagen idéntica casi no gasta "
+            "datos. 0 = transmitir solo cuando algo cambia.")
+        self.min_fps_row.set_value(self.cfg.min_fps)
+        grupo.add(self.min_fps_row)
+
         self.codec_row = Adw.ComboRow(title="Códec")
         self.codec_row.set_model(Gtk.StringList.new(
             ["HEVC (menos ancho de banda)", "H.264 (máxima compatibilidad)"]))
@@ -200,6 +210,7 @@ class Window(Adw.ApplicationWindow):
         self.cfg.max_width, self.cfg.max_height = \
             RESOLUCIONES[self.res_row.get_selected()][1]
         self.cfg.fps = FPS_OPCIONES[self.fps_row.get_selected()]
+        self.cfg.min_fps = min(int(self.min_fps_row.get_value()), self.cfg.fps)
         self.cfg.prefer_hevc = self.codec_row.get_selected() == 0
         self.cfg.adaptive = self.adaptive_row.get_active()
         self.cfg.cursor_mode = 1 if self.cursor_row.get_active() else 0
@@ -216,9 +227,9 @@ class Window(Adw.ApplicationWindow):
             self.stop_server()
 
     def _sensibilidad_ajustes(self, activos):
-        for fila in (self.res_row, self.fps_row, self.codec_row,
-                     self.adaptive_row, self.cursor_row, self.platform_row,
-                     self.bitrate_row):
+        for fila in (self.res_row, self.fps_row, self.min_fps_row,
+                     self.codec_row, self.adaptive_row, self.cursor_row,
+                     self.platform_row, self.bitrate_row):
             fila.set_sensitive(activos)
 
     def start_server(self):
@@ -330,8 +341,10 @@ class Window(Adw.ApplicationWindow):
             self.stats_row.set_subtitle("—")
             return False
         self.status_row.set_title("Transmitiendo")
-        self.status_row.set_subtitle("%dx%d @ %d fps · %s" % (
-            state["width"], state["height"], state["fps"], state["codec"]))
+        self.status_row.set_subtitle("%dx%d @ %d fps%s · %s" % (
+            state["width"], state["height"], state["fps"],
+            " (mínimo %d)" % state["min_fps"] if state.get("min_fps") else "",
+            state["codec"]))
         self.stats_row.set_subtitle(
             "%.1f Mbps  ·  %.0f fps reales  ·  %d frames en vuelo" % (
                 state["bitrate_actual"] / 1000.0, state["fps_actual"],

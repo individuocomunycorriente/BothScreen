@@ -131,6 +131,20 @@ EOF
 
 {
 cat <<EOF
+$PKG (1.2.0) unstable; urgency=medium
+
+  * Nuevo suelo de fps configurable: la tablet se refresca a un ritmo minimo
+    aunque en la pantalla no cambie nada. Por defecto 10 fps. Es lo que hace
+    que el puntero se vea moverse sobre un escritorio quieto: hasta ahora el
+    ultimo fotograma recibido -el que llevaba el cursor en su posicion nueva-
+    se quedaba sin mostrar en la tablet hasta que algo mas se movia.
+  * Se ajusta en la ventana (Calidad > FPS minimos garantizados) o con
+    --fps-minimo N; con 0 se vuelve al comportamiento anterior.
+  * El ajuste automatico ya no puede bajar el tope de fps por debajo del suelo
+    pedido.
+
+ -- Danko Leiva <danko.leiva236@gmail.com>  $(date -R)
+
 $PKG (1.1.0) unstable; urgency=medium
 
   * El proyecto pasa a llamarse BothScreen. Cambian el nombre del paquete, el

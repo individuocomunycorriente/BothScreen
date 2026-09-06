@@ -13,7 +13,7 @@ import os
 log = logging.getLogger(__name__)
 
 GUARDABLES = (
-    "max_width", "max_height", "fps", "prefer_hevc", "adaptive",
+    "max_width", "max_height", "fps", "min_fps", "prefer_hevc", "adaptive",
     "cursor_mode", "is_platform", "max_bitrate", "port",
 )
 

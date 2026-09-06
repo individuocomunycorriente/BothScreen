@@ -41,6 +41,11 @@ def build_parser():
                         "(por defecto 1920x1200)")
     p.add_argument("--fps", type=int, default=None,
                    help="fps máximos (por defecto 60)")
+    p.add_argument("--fps-minimo", "--min-fps", dest="min_fps", type=int,
+                   default=None,
+                   help="fps mínimos garantizados aunque no cambie nada en "
+                        "pantalla; es lo que mantiene el puntero al día "
+                        "(por defecto 10; 0 lo desactiva)")
     p.add_argument("--bitrate", type=int, default=6000,
                    help="bitrate inicial en kbps")
     p.add_argument("--max-bitrate", type=int, default=None,
@@ -102,6 +107,10 @@ def config_from_args(args, parser=None):
         cfg.max_width, cfg.max_height = parse_size(args.size)
     if args.fps is not None:
         cfg.fps = args.fps
+    if args.min_fps is not None:
+        cfg.min_fps = max(0, args.min_fps)
+    # Un suelo por encima del techo no significa nada: manda el techo.
+    cfg.min_fps = min(cfg.min_fps, cfg.fps)
     if args.max_bitrate is not None:
         cfg.max_bitrate = args.max_bitrate
     if args.codec is not None:

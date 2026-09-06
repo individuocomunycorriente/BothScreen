@@ -21,6 +21,7 @@ def main():
     cfg = Config()
     cfg.max_width, cfg.max_height = 1600, 1000
     cfg.fps = 30
+    cfg.min_fps = 15
     cfg.is_platform = True
     cfg.cursor_mode = 0
     cfg.prefer_hevc = False
@@ -29,6 +30,7 @@ def main():
     otro = settings.load(Config())
     ok &= check("resolución", (otro.max_width, otro.max_height) == (1600, 1000))
     ok &= check("fps", otro.fps == 30)
+    ok &= check("fps mínimos", otro.min_fps == 15, str(otro.min_fps))
     ok &= check("monitor de plataforma", otro.is_platform is True)
     ok &= check("modo de cursor", otro.cursor_mode == 0)
     ok &= check("códec", otro.prefer_hevc is False)
@@ -74,6 +76,25 @@ def main():
     ok &= check("se puede ignorar el archivo por completo",
                 cfg_c.fps == 60 and cfg_c.max_width == 1920
                 and cfg_c.is_platform is False)
+
+    print("\n4b) Suelo de fps por línea de órdenes")
+    cfg_d = app.config_from_args(
+        parser.parse_args(["--sin-ajustes-guardados", "--fps-minimo", "20"]),
+        parser)
+    ok &= check("--fps-minimo manda", cfg_d.min_fps == 20, str(cfg_d.min_fps))
+    cfg_e = app.config_from_args(
+        parser.parse_args(["--sin-ajustes-guardados", "--min-fps", "0"]),
+        parser)
+    ok &= check("se puede desactivar con 0", cfg_e.min_fps == 0)
+    cfg_f = app.config_from_args(
+        parser.parse_args(["--sin-ajustes-guardados",
+                           "--fps", "30", "--fps-minimo", "45"]), parser)
+    ok &= check("un suelo por encima del techo se recorta al techo",
+                cfg_f.min_fps == 30, str(cfg_f.min_fps))
+    cfg_g = app.config_from_args(
+        parser.parse_args(["--sin-ajustes-guardados"]), parser)
+    ok &= check("por defecto hay 10 fps garantizados", cfg_g.min_fps == 10,
+                str(cfg_g.min_fps))
 
     print("\n5) El servidor adb solo se apaga si lo levantamos nosotros")
     ajeno = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

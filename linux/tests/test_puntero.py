@@ -26,7 +26,7 @@ from bothscreen import encoder, protocol  # noqa: E402
 from test_pipeline import check  # noqa: E402
 
 
-def candidatos(want_cursor, con_va=True):
+def candidatos(want_cursor, con_va=True, min_fps=0):
     original = encoder._find_va_encoder
     if con_va:
         encoder._find_va_encoder = lambda codec: (
@@ -34,7 +34,8 @@ def candidatos(want_cursor, con_va=True):
     try:
         st = encoder.Streamer(
             42, 1920, 1200, 60, protocol.CODEC_H264, 6000,
-            on_frame=lambda *a: None, want_cursor=want_cursor)
+            on_frame=lambda *a: None, want_cursor=want_cursor,
+            min_fps=min_fps)
         return st._candidates()
     finally:
         encoder._find_va_encoder = original
@@ -139,6 +140,7 @@ def main():
         sesion.cfg = cfg
         sesion.codec = protocol.CODEC_H264
         sesion.width, sesion.height, sesion.max_rate = 1920, 1200, 60
+        sesion.min_rate = min(cfg.min_fps, sesion.max_rate)
         sesion.bitrate = 6000
         sesion._on_frame = lambda *a: None
         sesion._on_error = lambda *a: None
@@ -149,13 +151,17 @@ def main():
             on_error=sesion._on_error,
             prefer_hardware=cfg.prefer_hardware,
             rate_control=cfg.rate_control,
-            want_cursor=cfg.cursor_mode != 0)
+            want_cursor=cfg.cursor_mode != 0,
+            min_fps=sesion.min_rate)
         assert isinstance(streamer, FalsoStreamer)
     finally:
         encoder.Streamer = original
 
     ok &= check("por defecto el puntero está activado",
                 capturado.get("want_cursor") is True)
+    ok &= check("y le llega el suelo de fps",
+                capturado.get("min_fps") == server.Config().min_fps,
+                str(capturado.get("min_fps")))
 
     print("\n%s" % ("TODAS LAS PRUEBAS PASARON" if ok else "HAY FALLOS"))
     return 0 if ok else 1

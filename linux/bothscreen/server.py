@@ -28,6 +28,13 @@ class Config:
         self.max_width = 1920          # lado largo de la pantalla virtual
         self.max_height = 1200
         self.fps = 60
+        # Suelo de fps. El stream de Mutter va guiado por daño: con el
+        # escritorio quieto no se transmite nada, y entonces la tablet se queda
+        # enseñando el fotograma anterior al último que recibió. El puntero
+        # cruzando un escritorio inmóvil llegaba, pero no se veía hasta que algo
+        # más se movía. Con un suelo la imagen se refresca sí o sí a este ritmo.
+        # 0 lo desactiva y se vuelve al comportamiento de las versiones previas.
+        self.min_fps = 10
         self.min_bitrate = 1500        # kbps
         self.max_bitrate = 14000       # kbps
         self.start_bitrate = 6000      # kbps
@@ -134,6 +141,7 @@ class Session:
         self.codec = protocol.CODEC_H264
         self.bitrate = cfg.start_bitrate
         self.max_rate = cfg.fps
+        self.min_rate = min(cfg.min_fps, cfg.fps)
         self.running = False
 
         self._frames_out = 0
@@ -181,6 +189,9 @@ class Session:
         self.width, self.height = negotiate_resolution(
             self.cfg, hello["width"], hello["height"])
         self.max_rate = min(self.cfg.fps, hello["max_fps"] or self.cfg.fps)
+        # El suelo se recorta al techo que haya acabado negociándose: pedir 30
+        # fps mínimos a un panel que solo acepta 24 no tiene sentido.
+        self.min_rate = max(0, min(int(self.cfg.min_fps), self.max_rate))
         return name
 
     # ------------------------------------------------------------------ run
@@ -209,7 +220,8 @@ class Session:
             self.bitrate, on_frame=self._on_frame, on_error=self._on_error,
             prefer_hardware=self.cfg.prefer_hardware,
             rate_control=self.cfg.rate_control,
-            want_cursor=self.cfg.cursor_mode != 0)
+            want_cursor=self.cfg.cursor_mode != 0,
+            min_fps=self.min_rate)
         self.streamer.start()
         self.streamer.set_max_rate(self.max_rate)
 
@@ -219,10 +231,12 @@ class Session:
             self._threads.append(thread)
             thread.start()
         self._notify()
-        log.info("transmitiendo %dx%d@%d %s por %s",
+        log.info("transmitiendo %dx%d@%d %s por %s (%s)",
                  self.width, self.height, self.max_rate,
                  "HEVC" if self.codec == protocol.CODEC_HEVC else "H.264",
-                 self.streamer.description)
+                 self.streamer.description,
+                 "mínimo %d fps garantizados" % self.min_rate
+                 if self.min_rate else "sin suelo de fps")
         return name
 
     def _notify(self):
@@ -238,6 +252,7 @@ class Session:
             "width": self.width,
             "height": self.height,
             "fps": self.max_rate,
+            "min_fps": self.min_rate,
             "codec": "HEVC" if self.codec == protocol.CODEC_HEVC else "H.264",
             "hardware": bool(self.streamer and self.streamer.hardware),
             "pipeline": self.streamer.description if self.streamer else "",
@@ -297,6 +312,15 @@ class Session:
         self.stop()
 
     # ------------------------------------------------------------ adaptación
+    def floor_fps(self):
+        """Hasta dónde puede bajar el tope de fps por congestión.
+
+        Nunca por debajo del suelo pedido: si el techo cayera bajo el ritmo de
+        los reenvíos, el limitador se pondría a descartarlos y volvería el
+        síntoma del puntero invisible justo cuando el enlace va peor.
+        """
+        return max(24, self.min_rate)
+
     def _adapt(self):
         """Controlador AIMD sobre los frames en vuelo.
 
@@ -326,12 +350,14 @@ class Session:
             self._stats = {"bitrate": measured_kbps, "fps": measured_fps,
                            "in_flight": in_flight}
 
+            piso_fps = self.floor_fps()
+
             if self.cfg.adaptive:
                 if in_flight > 4:
                     self._stable_ticks = 0
                     target = max(self.cfg.min_bitrate, int(self.bitrate * 0.7))
-                    if in_flight > 8 and self.max_rate > 24:
-                        self.max_rate = max(24, self.max_rate - 10)
+                    if in_flight > 8 and self.max_rate > piso_fps:
+                        self.max_rate = max(piso_fps, self.max_rate - 10)
                         self.streamer.set_max_rate(self.max_rate)
                     if target != self.bitrate:
                         self.bitrate = target

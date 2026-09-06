@@ -4,7 +4,11 @@ Dos detalles que hacen que esto sea barato en ancho de banda:
 
 1. El stream de Mutter está guiado por daño: si nada cambia en la pantalla
    virtual, no llegan buffers y no se transmite absolutamente nada. No hay que
-   inventar detección de "pantalla estática", el compositor ya la hace.
+   inventar detección de "pantalla estática", el compositor ya la hace. Encima
+   de eso hay un suelo de fps configurable (`min_fps`), que reenvía el último
+   fotograma para que la imagen de la tablet nunca se quede congelada un
+   fotograma por detrás; un reenvío de contenido idéntico se codifica en unos
+   pocos cientos de bytes, así que el suelo sale casi gratis.
 
 2. El codificador trabaja en CBR con un GOP largo y sin B-frames. El bitrate y
    el tope de fps se ajustan en caliente desde el controlador adaptativo de
@@ -214,9 +218,13 @@ class Streamer:
 
     def __init__(self, node_id, width, height, fps, codec, bitrate_kbps,
                  on_frame, on_error=None, prefer_hardware=True,
-                 rate_control="vbr", want_cursor=True):
+                 rate_control="vbr", want_cursor=True, min_fps=0):
         init_gst()
         self.rate_control = rate_control
+        # Suelo de fps: cuántos fotogramas por segundo salen como mínimo aunque
+        # en la pantalla virtual no cambie absolutamente nada. 0 lo desactiva y
+        # se vuelve al comportamiento puro guiado por daño.
+        self.min_fps = max(int(min_fps), 0)
         # Con puntero NO se puede usar el camino DMABuf. Mutter tiene dos
         # formas de entregar el fotograma y elige según lo que negocie el
         # cliente: si los caps llevan la característica memory:DMABuf,
@@ -234,6 +242,7 @@ class Streamer:
         self.width = width
         self.height = height
         self.fps = fps
+        self.max_fps = max(int(fps), 1)
         self.codec = codec
         self.bitrate_kbps = bitrate_kbps
         self.on_frame = on_frame
@@ -242,6 +251,7 @@ class Streamer:
 
         self.pipeline = None
         self.encoder = None
+        self.source = None
         self.limiter = _RateLimiter(fps)
         self.appsink = None
         self.description = ""
@@ -251,6 +261,33 @@ class Streamer:
         self._bus_watched = False
 
     # ------------------------------------------------------------ pipelines
+    def keepalive_ms(self):
+        """Cada cuántos ms se reenvía el último fotograma si no llega otro.
+
+        Es el único sitio donde se puede imponer un suelo de fps sin pelearse
+        con la negociación de caps. En pipewiresrc, cuando el hilo de streaming
+        lleva `keepalive-time` ms esperando un buffer que no llega, sale del
+        `pw_thread_loop_timed_wait_full` por timeout y empuja otra referencia
+        del último buffer con `update_time = TRUE`, que le pone PTS y DTS del
+        reloj del pipeline (gstpipewiresrc.c, `gst_pipewire_src_create`). O sea:
+        el fotograma repetido entra en la misma línea de tiempo, más adelante
+        que el anterior, así que ni el limitador lo confunde con un duplicado ni
+        el codificador ve el reloj ir hacia atrás.
+
+        Sin esto la cadena se para del todo cuando el escritorio está quieto, y
+        el decodificador de la tablet se queda con el último fotograma recibido
+        —justo el que lleva el puntero en su posición nueva— sin sacarlo a
+        pantalla hasta que algo más se mueva. De ahí que el cursor pareciera no
+        existir.
+        """
+        # El suelo nunca puede superar al techo: si el adaptador baja el tope de
+        # fps por debajo del ritmo de los reenvíos, el limitador se pondría a
+        # descartarlos y el suelo dejaría de existir.
+        piso = min(self.min_fps, self.max_fps)
+        if piso <= 0:
+            return 1000                      # un latido por segundo, como antes
+        return max(1, int(round(1000.0 / piso)))
+
     def _candidates(self):
         codec_name = "h264" if self.codec == protocol.CODEC_H264 else "h265"
         parse = "h264parse" if self.codec == protocol.CODEC_H264 else "h265parse"
@@ -266,10 +303,14 @@ class Streamer:
         # actualizaciones sueltas — justo las que produce un puntero moviéndose
         # sobre un escritorio quieto. Copiando de entrada, el buffer vuelve a
         # Mutter enseguida y nunca se queda sin.
+        #
+        # `keepalive-time` fija el suelo de fps (ver keepalive_ms) y
+        # `resend-last=true` es lo que hace que pipewiresrc guarde el último
+        # buffer para poder reenviarlo.
         src = (
             "pipewiresrc name=src path={node} do-timestamp=true "
-            "keepalive-time=1000 resend-last=true always-copy=true"
-        ).format(node=self.node_id)
+            "keepalive-time={keepalive} resend-last=true always-copy=true"
+        ).format(node=self.node_id, keepalive=self.keepalive_ms())
 
         # Aquí NO se pide framerate. Mutter anuncia el suyo (normalmente 0/1,
         # variable, porque el stream va guiado por daño) y exigirle un valor
@@ -418,6 +459,7 @@ class Streamer:
     def _build(self, description):
         self.pipeline = Gst.parse_launch(description)
         self.encoder = self.pipeline.get_by_name("venc")
+        self.source = self.pipeline.get_by_name("src")
         self.appsink = self.pipeline.get_by_name("sink")
 
         # El tope de fps se aplica a la salida de la cola, antes de convertir y
@@ -501,7 +543,23 @@ class Streamer:
         _set_if_present(self.encoder, "cpb-size", max(kbps // 2, 500))
 
     def set_max_rate(self, fps):
-        self.limiter.set_fps(fps)
+        self.max_fps = max(int(fps), 1)
+        self.limiter.set_fps(self.max_fps)
+        self._apply_keepalive()
+
+    def set_min_fps(self, fps):
+        """Cambia el suelo de fps en caliente, sin rehacer el pipeline."""
+        self.min_fps = max(int(fps), 0)
+        self._apply_keepalive()
+
+    def _apply_keepalive(self):
+        """Reprograma el temporizador de reenvío del pipeline en marcha.
+
+        pipewiresrc lee `keepalive_time` en cada vuelta de su bucle, así que un
+        cambio entra en vigor como muy tarde al vencer la espera ya armada.
+        """
+        if self.source is not None:
+            _set_if_present(self.source, "keepalive-time", self.keepalive_ms())
 
     def force_keyframe(self):
         if self.encoder is None:
@@ -526,4 +584,5 @@ class Streamer:
         self.limiter.forget()
         self.pipeline = None
         self.encoder = None
+        self.source = None
         self.appsink = None

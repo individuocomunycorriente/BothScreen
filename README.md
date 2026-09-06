@@ -12,7 +12,7 @@ Dos piezas:
 
 | Pieza | Qué es | Dónde va |
 |---|---|---|
-| `bothscreen_1.0.4_all.deb` | Daemon + ventana de control (Python/GTK4) | PC Linux |
+| `bothscreen_1.2.0_all.deb` | Daemon + ventana de control (Python/GTK4) | PC Linux |
 | `bothscreen.apk` | Visor a pantalla completa (Java/MediaCodec) | Tab S7 |
 
 El `.deb` ya lleva el `.apk` dentro y lo instala solo en la tablet la primera
@@ -68,7 +68,16 @@ CPU en ningún momento.
 daemon mira cuántos lleva sin confirmar: si se acumulan, baja el bitrate un 30 %
 y, si la cosa sigue mal, recorta los fps; si se mantiene al día durante dos
 segundos, sube un 15 %. Es un AIMD clásico, el mismo principio que TCP, y evita
-tanto los cortes como el gastar 20 Mbps para mostrar un editor de texto.
+tanto los cortes como el gastar 20 Mbps para mostrar un editor de texto. Lo que
+nunca hace es bajar el tope de fps por debajo del suelo pedido (ver *Los fps
+mínimos*).
+
+**Un suelo de fps.** Que el compositor no repinte no puede significar que la
+tablet se quede a medias. Por defecto se garantizan 10 fps: si en una décima de
+segundo no llega nada nuevo, se reenvía el último fotograma. Repetir una imagen
+idéntica se codifica en unos cientos de bytes, así que en reposo se sigue sin
+gastar ancho de banda apreciable, y a cambio lo que se ve en la tablet nunca va
+un fotograma por detrás de lo que hay en el PC.
 
 Además, `h264parse`/`h265parse` pegan los SPS/PPS delante de cada keyframe, pero
 `MediaCodec` los quiere en un buffer aparte marcado como `BUFFER_FLAG_CODEC_CONFIG`.
@@ -91,7 +100,7 @@ primer keyframe y la tablet se queda en negro unos segundos.
 ### 3.1 En el PC
 
 ```bash
-sudo apt install ./bothscreen_1.0.4_all.deb
+sudo apt install ./bothscreen_1.2.0_all.deb
 ```
 
 Si `apt` se queja de dependencias:
@@ -160,6 +169,8 @@ bothscreen --size 1600x1000      # menos ancho de banda
 bothscreen --codec h264          # si HEVC diera problemas
 bothscreen --no-adaptive --bitrate 10000   # bitrate fijo
 bothscreen --fps 30              # la mitad de datos, sigue fluido para trabajar
+bothscreen --fps-minimo 30       # refresco garantizado más alto (cursor más fino)
+bothscreen --fps-minimo 0        # solo transmitir cuando algo cambia
 bothscreen -v                    # log detallado, útil para diagnosticar
 ```
 
@@ -202,6 +213,33 @@ cada camino, y los compara: si la única diferencia es una manchita de unos
 cientos de píxeles, ese es el puntero. Deja los PNG en
 `~/.cache/bothscreen/`. Durante la prueba hay que dejar el ratón quieto
 sobre la pantalla virtual.
+
+### Los fps mínimos
+
+El stream de Mutter va guiado por daño: si en la pantalla virtual no cambia
+nada, no llega ni un fotograma. Eso ahorra muchísimo ancho de banda, pero tiene
+un efecto secundario feo: el decodificador de la tablet no saca a pantalla el
+último fotograma que ha recibido hasta que le llega el siguiente. Con el
+escritorio quieto, ese último fotograma es justo el que lleva el puntero en su
+posición nueva, así que el cursor parecía no existir hasta que se movía otra
+cosa.
+
+El suelo de fps lo arregla obligando a que salga un fotograma cada tanto pase lo
+que pase. Se implementa con `keepalive-time` de `pipewiresrc`: cuando el hilo de
+captura lleva ese tiempo esperando un buffer que no llega, sale por *timeout* y
+empuja otra referencia del último, poniéndole PTS y DTS del reloj del pipeline
+(`gst_pipewire_src_create`). Es decir, el fotograma repetido entra más adelante
+en la línea de tiempo, no como un duplicado, así que ni el limitador lo descarta
+ni el codificador ve el reloj ir hacia atrás.
+
+```bash
+bothscreen --fps-minimo 10       # por defecto
+bothscreen --fps-minimo 30       # el puntero se mueve más fino
+bothscreen --fps-minimo 0        # desactivado: solo cuando algo cambia
+```
+
+En la ventana es **Calidad → FPS mínimos garantizados**. El suelo nunca puede
+superar al tope de fps: si pides más, manda el tope.
 
 ### Ajustes que se recuerdan
 
@@ -285,21 +323,23 @@ Casi siempre es el códec. Prueba `bothscreen --codec h264`. Si con H.264
 va bien, tu Tab S7 está rechazando el perfil HEVC que genera la Radeon.
 
 **La pantalla parece congelada hasta que muevo mucho las cosas**
-Mira el campo *Caudal* de la ventana mientras mueves el ratón por la pantalla
-virtual: ahí sale el número de fotogramas por segundo reales. Si al mover el
-ratón sobre el fondo del escritorio marca 0, es que GNOME no está repintando esa
-pantalla y no hay nada que el pipeline pueda hacer; si marca 30-60, todo va como
-debe. Cuéntamelo si sale 0.
+Desde la 1.2.0 hay un suelo de fps precisamente para esto: mira que en la ventana
+*FPS mínimos garantizados* no esté en 0 y súbelo a 20-30. El campo *Caudal*
+muestra los fotogramas por segundo reales; en reposo tienen que rondar el suelo
+que hayas puesto, nunca 0.
 
 **Va a tirones o el HUD muestra muchos «frames en vuelo»**
 Baja la resolución (`--size 1600x1000`) o los fps (`--fps 30`). Si persiste con
 todo bajo, prueba `--software` para descartar que el problema esté en VA-API.
 
 **El puntero del ratón no se ve**
-Comprueba en el log (`bothscreen -v`) qué pipeline se activó: tiene que
-poner `va-memoria`, `va-memoria-cpu` o `software`, nunca `va-dmabuf`. Si sale
-`va-dmabuf` es que el puntero está desactivado en los ajustes. Ver *El puntero
-del ratón* más arriba para el porqué, y `--diagnostico` para comprobarlo.
+Primero, sube los fps mínimos: `bothscreen --fps-minimo 30`. Si el cursor se ve
+al mover ventanas pero no sobre el escritorio quieto, el problema era ese y no
+la captura. Si sigue sin verse, comprueba en el log (`bothscreen -v`) qué
+pipeline se activó: tiene que poner `va-memoria`, `va-memoria-cpu` o `software`,
+nunca `va-dmabuf`. Si sale `va-dmabuf` es que el puntero está desactivado en los
+ajustes. Ver *El puntero del ratón* más arriba para el porqué, y `--diagnostico`
+para comprobarlo.
 
 **Pulso Detener y luego Iniciar y no arranca**
 Eso era un fallo de la 1.0.0: el hilo que esperaba conexiones no moría y dejaba
@@ -432,6 +472,25 @@ que faltaba en la 1.0.0 y el que destapó los dos fallos del botón.
 ---
 
 ## 10. Historial
+
+### 1.2.0
+
+- **Suelo de fps configurable**, por defecto 10. La tablet se refresca a ese
+  ritmo aunque en la pantalla no cambie nada, y con eso el puntero se ve moverse
+  sobre un escritorio quieto: hasta ahora el último fotograma recibido —el que
+  llevaba el cursor recién movido— se quedaba sin mostrar en la tablet hasta que
+  algo más se movía. Se ajusta en la ventana (*Calidad → FPS mínimos
+  garantizados*) o con `--fps-minimo N`; con `0` se recupera el comportamiento
+  anterior, puramente guiado por daño.
+- Se implementa con el `keepalive-time` de `pipewiresrc`, que reenvía el último
+  buffer con marca de tiempo nueva. No toca la negociación de caps, que es la
+  parte frágil de todo esto.
+- El ajuste automático ya no puede bajar el tope de fps por debajo del suelo
+  pedido: si pudiera, el limitador empezaría a descartar los reenvíos justo
+  cuando el enlace va peor.
+- `test_fluidez.py` cubre el suelo (intervalos, recorte contra el tope, cambio
+  en caliente) y `test_ajustes.py` que se guarde y se pueda pisar desde la
+  terminal.
 
 ### 1.1.0
 

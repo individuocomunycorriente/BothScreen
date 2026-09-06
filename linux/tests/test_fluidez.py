@@ -177,6 +177,64 @@ def main():
     ok &= check("el fallo del roto no llegó a on_error", not avisos,
                 str(avisos))
 
+    print("\n8) Suelo de fps: la imagen no se congela con el escritorio quieto")
+    # El síntoma de la 1.1.0: con nada moviéndose no salía ningún fotograma, y
+    # la tablet se quedaba enseñando el anterior al último recibido —el que
+    # llevaba el puntero recién movido— hasta que algo más se movía. El suelo se
+    # impone con el keepalive-time de pipewiresrc: al vencer la espera reenvía
+    # el último buffer con PTS/DTS del reloj del pipeline, así que el fotograma
+    # repetido cae más adelante en la línea de tiempo y el limitador lo deja
+    # pasar en vez de tomarlo por un duplicado.
+    ok &= check("sin suelo se conserva el latido de 1 s",
+                all("keepalive-time=1000 " in c[3]
+                    for c in candidatos(True, min_fps=0)))
+    diez = candidatos(True, min_fps=10)
+    ok &= check("10 fps mínimos -> reenvío cada 100 ms",
+                all("keepalive-time=100 " in c[3] for c in diez),
+                str([c[0] for c in diez if "keepalive-time=100 " not in c[3]]))
+    ok &= check("30 fps mínimos -> reenvío cada 33 ms",
+                all("keepalive-time=33 " in c[3]
+                    for c in candidatos(True, min_fps=30)))
+    ok &= check("el reenvío sigue habilitado en todos",
+                all("resend-last=true" in c[3]
+                    for c in candidatos(True, min_fps=10)
+                    + candidatos(False, min_fps=10)))
+
+    st4 = encoder.Streamer(42, 1920, 1200, 60, protocol.CODEC_H264, 6000,
+                           on_frame=lambda *a: None, min_fps=15)
+    ok &= check("15 fps mínimos -> 67 ms", st4.keepalive_ms() == 67,
+                str(st4.keepalive_ms()))
+    st4.set_max_rate(10)
+    ok &= check("si el techo baja del suelo, manda el techo",
+                st4.keepalive_ms() == 100, str(st4.keepalive_ms()))
+    st4.set_max_rate(60)
+    ok &= check("y al recuperarse el techo vuelve el suelo pedido",
+                st4.keepalive_ms() == 67, str(st4.keepalive_ms()))
+    st4.set_min_fps(0)
+    ok &= check("se puede desactivar en caliente",
+                st4.keepalive_ms() == 1000, str(st4.keepalive_ms()))
+
+    # Y el limitador tiene que dejar pasar esos reenvíos: llegan espaciados
+    # justo el intervalo del suelo, que por construcción nunca es menor que el
+    # intervalo mínimo del tope.
+    lim5 = encoder._RateLimiter(60)
+    paso = [lim5.should_pass(int(i * 0.1 * Gst.SECOND)) for i in range(10)]
+    ok &= check("los reenvíos a 10 fps pasan con el tope en 60",
+                all(paso), str(paso))
+
+    print("\n9) El adaptador no puede hundir el tope por debajo del suelo")
+    from bothscreen import server
+
+    sesion = server.Session.__new__(server.Session)
+    sesion.min_rate = 30
+    ok &= check("con 30 fps de suelo, el tope no baja de 30",
+                sesion.floor_fps() == 30, str(sesion.floor_fps()))
+    sesion.min_rate = 10
+    ok &= check("con 10 de suelo se conserva el límite histórico de 24",
+                sesion.floor_fps() == 24, str(sesion.floor_fps()))
+    sesion.min_rate = 0
+    ok &= check("sin suelo, igual que siempre", sesion.floor_fps() == 24)
+
     print("\n%s" % ("TODAS LAS PRUEBAS PASARON" if ok else "HAY FALLOS"))
     return 0 if ok else 1
 
